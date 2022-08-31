@@ -1,2 +1,2 @@
 source /opt/ros/galactic/setup.bash
-python system.py
+python collector_ros_node.py && system.py
