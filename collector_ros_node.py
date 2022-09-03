@@ -9,7 +9,7 @@ from rclpy.node import Node
 from turtlesim.msg import Color, Pose
 
 from config import QOS_PROFILE, SAMPLE_PERIOD_SECONDS
-from memory import InternalState
+from memory import Memory
 
 # TODO: set up configuration for a better logging system - CONFIG FILE FOR IP
 # TODO: type everything later
@@ -21,13 +21,13 @@ logger = logging.getLogger(__name__)
 # TODO: Make Topic and message handling more abstract
 
 
-def turtle1_pose_handler(message):
-    print("in pose handler")
-    pass
+def turtle1_pose_handler(pose):
+    print(f"Message: {pose}")
+    x, y, theta = pose.x, pose.y, pose.theta
+    Memory.update_agv_state(x=x, y=y, theta=theta)
 
 
 def turtle1_color_sensor_handler(message):
-    print("in color sensor handler")
     pass
 
 
@@ -68,7 +68,9 @@ class InformationRetrievalNode(Node):
     def __init__(self):
         super().__init__(f"information_retrieval_node")
         self.node_subscriptions = defaultdict(lambda: InformationRetrievalSubscription())
-        self.state = InternalState(wipe_memory=True)
+
+        Memory.wipe_database()
+        Memory.create_agv_state()
 
         # partial used to pass in the topic_name for the handler
         for topic in TOPICS:
@@ -89,7 +91,6 @@ class InformationRetrievalNode(Node):
                 print(error)
                 raise Exception(f"Could not establish subscription connection to topic: [{topic}]")
             logger.info(f"InformationRetrievalNode creation for topic:[{topic}] successful!")
-        print(self.node_subscriptions)
 
     def should_sample_ros_information(self, topic_name):
         node_subscription = self.node_subscriptions.get(topic_name, None)
@@ -110,7 +111,6 @@ class InformationRetrievalNode(Node):
         # check if this callback should run with time
         if not self.should_sample_ros_information(topic_name):
             return
-
         try:
             InformationRetrievalHandler.handle_message(topic_name, message)
         except Exception as error:
