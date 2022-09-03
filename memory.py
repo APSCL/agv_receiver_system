@@ -1,7 +1,5 @@
 from enum import Enum
 
-import pandas as pd
-from sqlaclhemy.orm import relationship, sessionmaker
 from sqlalchemy import (
     Boolean,
     Column,
@@ -13,51 +11,47 @@ from sqlalchemy import (
     create_engine,
 )
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 
+from config import DATABASE_NAME
 from core import AGVState, BaseEnum, TaskStatus
 
 Base = declarative_base()
+
 
 class AGV(Base):
     __tablename__ = "agv"
     id = Column(Integer, primary_key=True)
     x = Column(Float)
     y = Column(Float)
-    status = Column(
-        Enum(AGVState), 
-        default=AGVState.READY,
-        nullable=False
-    )
-    current_task = relationship(
-        "Task",
-        backref="assigned_agv",
-        uselist=False
-    )
+    theta = Column(Float)
+    status = Column(Enum(AGVState), default=AGVState.READY, nullable=False)
+    # lazy = joined is eager loading and crucial to ensuring that we have access to objects outside of sessions
+    current_task = relationship("Task", backref="assigned_agv", uselist=False, lazy="joined")
 
-    def __init__(self, x=None, y=None, status=None, current_task=None):
+    def __init__(self, x=None, y=None, theta=None, status=None, current_task=None):
         self.x = x if x is not None else 0.0
         self.y = y if y is not None else 0.0
+        self.theta = theta if theta is not None else 0.0
         if current_task is not None:
             self.current_task = current_task
+        # else:
+        #     self.current_task = None
         if status is not None:
             self.status = status
+        else:
+            self.status = None
 
     def __repr__(self):
-        return f"AGV | ID:{self.id} | X:{self.x} Y:{self.y} | STATUS: {str(self.status)}"    
+        return f"AGV | ID:{self.id} | X:{self.x} Y:{self.y} THETA: {self.theta}| STATUS: {str(self.status)}"
+
 
 class Task(Base):
     __tablename__ = "task"
     id = Column(Integer, primary_key=True)
-    waypoints = relationship(
-        "Waypoint", 
-        backref="task"
-    )
-    status = Column(
-        Enum(TaskStatus), 
-        default=TaskStatus.IN_PROGRESS, 
-        nullable=False
-    )
-    agv_id = Column(Integer, ForeignKey('agv.id'))
+    waypoints = relationship("Waypoint", backref="task", lazy="joined")
+    status = Column(Enum(TaskStatus), default=TaskStatus.INCOMPLETE, nullable=False)
+    agv_id = Column(Integer, ForeignKey("agv.id"))
 
     @property
     def num_waypoints(self):
@@ -68,9 +62,12 @@ class Task(Base):
     def __init__(self, status=None):
         if status is not None:
             self.status = status
+        else:
+            self.status = TaskStatus.INCOMPLETE
 
     def __repr__(self):
-        return f"TASK | ID:{self.id} | STATUS: {str(self.status)} | NUM_WAYPOINTS:{self.num_waypoints}"        
+        return f"TASK | ID:{self.id} | STATUS: {str(self.status)} | NUM_WAYPOINTS:{self.num_waypoints}"
+
 
 class Waypoint(Base):
     __tablename__ = "waypoint"
@@ -88,94 +85,154 @@ class Waypoint(Base):
         self.visited = visited if visited is not None else False
 
     def __repr__(self):
-        return f"WAYPOINT | ID:{self.id} | TASK:{self.task_id} | X:{self.x} Y:{self.y} | ORDER:{self.order} | VISITED:{self.visited}"   
+        return f"WAYPOINT | ID:{self.id} | TASK:{self.task_id} | X:{self.x} Y:{self.y} | ORDER:{self.order} | VISITED:{self.visited}"
 
-class AGVMemory(BaseEnum):
-    IN_MEMORY = "sqlite:///:memory:"
-    SHARED_MEMORY = "sqlite:///state.db"
 
-# TODO: Consider Renaming!
-# TODO: Description - two different instances 
-class InternalState:
-    def __init__(self, db_name=str(AGVMemory.SHARED_MEMORY), wipe_memory=False):
-        engine = create_engine(db_name)
-        Base.metadata.create_all(bind=engine)
-        Session = sessionmaker(bind=engine)
-        self.db_name = db_name
-        self.session = Session()
+# https://stackoverflow.com/questions/25156264/sqlalchemy-using-decorator-to-provide-thread-safe-session-for-multiple-function
+def thread_safe_db_access(func):
+    engine = create_engine(DATABASE_NAME)
+    Base.metadata.create_all(bind=engine)
+    session_factory = sessionmaker(bind=engine)
+    Session = scoped_session(session_factory)
 
-        # create internal representation of AGV
-        if wipe_memory:
-            Base.metadata.drop_all(bind=engine)
-            Base.metadata.create_all(bind=engine)
-            self.create_agv_state()
+    def inner(*args, **kwargs):
+        session = Session()
+        result = None
+        try:
+            result = func(*args, **kwargs, session=session)
+            session.commit()
+        except:
+            session.rollback()
+        finally:
+            # session.expunge_all()
+            Session.remove()
+        return result
 
-        self.agv = self.get_agv()
+    return inner
 
-    def update_memory(self):
-        self.session.commit()
 
-    def create_agv_state(self):
+# TODO: Figure out how to create sessions and then close them!!
+# TODO: Description - two different instances
+# TODO: First Draft - EDIT LATER (maybe make each funtion a dynamic memory query instead!! (create filter statemetns with kwarsg etc))
+# TODO: Document what @thread_safe_db_access does
+class Memory:
+    # Comment, internal methods that work INSIDE of sessions will have the '-' suffix
+    @classmethod
+    @thread_safe_db_access
+    def wipe_database(cls, session=None):
+        session.query(AGV).delete()
+        session.query(Waypoint).delete()
+        session.query(Task).delete()
+
+    # Creation Methods
+    @classmethod
+    @thread_safe_db_access
+    def create_agv_state(cls, session=None):
+        # ensure there only exists one definition of the AGV at a time!
+        agv = session.query(AGV).first()
+        if agv is not None:
+            return
         agv = AGV()
-        self.session.add(agv)
-        self.update_memory()
+        session.add(agv)
 
-    def current_task_exists(self):
-        current_task_id = self.get_agv_state().current_task
-        if current_task_id is None:
-            return False
-        return True
+    @classmethod
+    @thread_safe_db_access
+    def create_task(cls, waypoints, status=TaskStatus.INCOMPLETE, session=None):
+        # for now, waypoints will be [(x,y,order)], before I assign them to a serialzer!
+        task = Task(status=status)
+        session.add(task)
+        for waypoint in waypoints:
+            x, y, order = waypoint
+            task.waypoints.append(Waypoint(x=x, y=y, order=order, visited=False))
+            session.merge(task)
 
-    def get_agv(self):
-        return AGV.query.first()
+    # Retrieval Methods - expose objects outside of sessions (OUTSIDE, NOT INTERNAL GET)
+    @classmethod
+    @thread_safe_db_access
+    def get_agv(cls, session=None):
+        agv = session.query(AGV).first()
+        current_task = agv.current_task
 
-    def get_current_task_waypoints(self, only_unvisited=False):
-        if not self.current_task_exists():
-            return []
-        current_task_id = self.agv.current_task
-        filter_kwargs = {"task_id":current_task_id}
-        if only_unvisited:
-            filter_kwargs["visited"] = False
-        waypoints =  Waypoint.query.filter_by(**filter_kwargs).order_by(Waypoint.order.asc()).all()
-        return waypoints
-
-    def get_current_task_current_waypoint(self):
-        if not self.current_task_exists():
-            return None
-        waypoints = self.get_current_task_waypoints(only_unvisited=True)
-        if waypoints:
-            return waypoints[0]
-        return None
-
-    def update_agv_state(self, x=None, y=None, status=None, current_task=None):
-        if x is not None:
-            self.agv.x = x
-        if y is not None:
-            self.agv.y = y
-        if status is not None:
-            self.agv.status = status
+        # expose agv and its current task (with associated waypoints) object for external session access
+        session.expunge(agv)
         if current_task is not None:
-            self.agv.current_task = current_task
+            session.expunge(current_task)
+            task_waypoints = session.query(Waypoint).filter_by(task_id=current_task.id).all()
+            cls._expunge_query_statement(session=session, query=task_waypoints)
+        return agv
 
-        self.update_memory()
+    @classmethod
+    @thread_safe_db_access
+    def get_next_task(cls, session=None):
+        task = (
+            session.query(Task)
+            .filter_by(status=TaskStatus.INCOMPLETE)
+            .order_by(Task.id.asc())
+            .first()
+        )
+        task_waypoints = session.query(Waypoint).filter_by(task_id=task.id).all()
 
-    def update_agv_current_task_status(self, status=None):
-        task = self.agv.current_task
+        # expose task waypoints
+        session.expunge(task)
+        cls._expunge_query_statement(session=session, query=task_waypoints)
+        return task
+
+    @classmethod
+    @thread_safe_db_access
+    def get_all_tasks(cls, session=None):
+        tasks = session.query(Task).all()
+        cls._expunge_query_statement(session=session, query=tasks)
+        return tasks
+
+    @classmethod
+    @thread_safe_db_access
+    def update_agv_state(
+        cls, x=None, y=None, theta=None, status=None, current_task_id=None, session=None
+    ):
+        agv = session.query(AGV).first()
+        if x is not None:
+            agv.x = x
+        if y is not None:
+            agv.y = y
+        if theta is not None:
+            agv.theta = theta
+        if status is not None:
+            agv.status = status
+        if current_task_id is not None:
+            task = session.query(Task).filter_by(id=current_task_id).first()
+            if task is not None:
+                agv.current_task = task
+
+    @classmethod
+    @thread_safe_db_access
+    def update_agv_current_task_status(cls, status=None, session=None):
+        agv = session.query(AGV).first()
+        task = agv.current_task
         if task is None:
-            return 
+            return
         if type(status) is not TaskStatus:
             return
         task.status = status
-        
-        self.update_memory()
 
-    def update_current_waypoint(self, visited=False):
-        current_waypoint = self.get_current_task_current_waypoint()
+    @classmethod
+    @thread_safe_db_access
+    def update_current_waypoint(cls, visited=False, session=None):
+        agv = session.query(AGV).first()
+        current_waypoint = agv.current_waypoint
         if current_waypoint is None:
             return
         current_waypoint.visited = visited
 
-        self.update_memory()
-
-    def close(self):
-        self.session.close()
+    @classmethod
+    def _expunge_query_statement(cls, session=None, query=None):
+        """
+        Bread and butter for exposing objects for external use in memory!
+        """
+        if session is None or query is None:
+            print(f"session: {session} | query: {query} must both be defined!")
+            return
+        if type(query) is not list:
+            print("query must be a list, not a model/object")
+            return
+        for obj in query:
+            session.expunge(obj)
