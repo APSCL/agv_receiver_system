@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import logging
 import time
+from distutils.log import debug
 
 import numpy as np
 import rclpy
@@ -9,9 +10,10 @@ from rclpy.node import Node
 
 logger = logging.getLogger(__name__)
 
-ANG_SPEED = (30) * 2 * np.pi / 360  # deg/sec
+ANG_SPEED = (15) * 2 * np.pi / 360  # deg/sec
 LINEAR_SPEED = 1.0
 EPSILON = 0.001
+DEBUG = 1
 
 
 class TurtleSimNavigationPublisher(Node):
@@ -48,15 +50,17 @@ class TurtleSimNavigationPublisher(Node):
         ), self._transform_rads_to_continuous_range(current_theta)
         diff_theta = goal_theta_t - current_theta_t
 
-        print(f"Diff X: {diff_x}, Diff Y: {diff_y}")
-        print(f"Goal Theta: {goal_theta}, Current Theta: {current_theta}")
-        print(f"Goal Theta T: {goal_theta_t}, Current Theta T: {current_theta_t}")
-        print(
-            f"Diff Theta T: {diff_theta}, Angular Speed: {float(np.sign(diff_theta) * ANG_SPEED)}"
-        )
+        if DEBUG:
+            print(f"Goal X: {goal_x}, Goal Y: {goal_y}")
+            print(f"Diff X: {diff_x}, Diff Y: {diff_y} Diff Distance:{goal_distance}")
+            print(f"Goal Theta: {goal_theta}, Current Theta: {current_theta}")
+            print(f"Goal Theta T: {goal_theta_t}, Current Theta T: {current_theta_t}")
+            print(
+                f"Diff Theta T: {diff_theta}, Angular Speed: {float(np.sign(diff_theta) * ANG_SPEED)}"
+            )
 
         self._rotate(diff_theta)
-        self._move_forward(goal_distance)
+        self._move_forward(goal_distance, goal_theta)
 
     def _rotate(self, theta):
         vel_msg = self._init_twist_message()
@@ -66,22 +70,34 @@ class TurtleSimNavigationPublisher(Node):
         t0 = time.time()
         current_angle = 0
 
-        print("here in rotate")
+        debug_counter = 0
+
         while 0 < abs(theta - current_angle) and abs(theta - current_angle) > (EPSILON):
             # print(f"Rotate Current Angle Diff: {theta-current_angle}")
             self.velocity_publisher.publish(vel_msg)
             t1 = time.time()
             current_angle = float(np.sign(theta) * ANG_SPEED) * (t1 - t0)
-
+            if DEBUG and debug_counter == 3000:
+                debug_counter = 0
+                print(current_angle)
+            debug_counter += 1
+        print(current_angle)
         # Force Robot to stop
         vel_msg.angular.z = 0.0
         self.velocity_publisher.publish(vel_msg)
 
-    def _move_forward(self, distance):
+    def _move_forward(self, distance, theta):
         vel_msg = self._init_twist_message()
+        # adjust with theta
+
+        # DEBUG ACTUAL POSITION ENDED UP - PRINT THAT OUT AND SEE IF YOU NEED TO ADJUST
+        # CASE STUDY (5.5, 5.5) to (10 , 10)
+
         vel_msg.linear.x = float(LINEAR_SPEED)
         t0 = time.time()
         current_distance = 0
+
+        debug_counter = 0
 
         # Loop to move the turtle in an specified distance
         while current_distance < distance:
@@ -91,6 +107,11 @@ class TurtleSimNavigationPublisher(Node):
             t1 = time.time()
             # Calculates distancePoseStamped
             current_distance = float(LINEAR_SPEED) * (t1 - t0)
+            if DEBUG and debug_counter == 3000:
+                debug_counter = 0
+                print(current_distance)
+            debug_counter += 1
+        print(current_distance)
         # After the loop, stops the robot
         vel_msg.linear.x = 0.0
         # Force the robot to stop

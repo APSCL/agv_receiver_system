@@ -37,14 +37,14 @@ def main():
     # print(agv.current_task.waypoints[0].id)
 
     # Test Navigating to a waypoint [WORKS]
-    # rclpy.init()
-    # nav = TurtleSimNavigationPublisher()
-    # agv = Memory.get_agv()
-    # print(agv)
-    # x, y, theta = agv.x, agv.y, agv.theta
-    # goal_x = 1.0
-    # goal_y = 1.0
-    # nav.navigate_to(x, y, theta, goal_x, goal_y)
+    rclpy.init()
+    nav = TurtleSimNavigationPublisher()
+    agv = Memory.get_agv()
+    print(agv)
+    x, y, theta = agv.x, agv.y, agv.theta
+    goal_x = 10.0
+    goal_y = 10.0
+    nav.navigate_to(x, y, theta, goal_x, goal_y)
 
 
 if __name__ == "__main__":

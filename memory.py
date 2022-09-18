@@ -1,3 +1,4 @@
+import os
 from enum import Enum
 
 from sqlalchemy import (
@@ -13,14 +14,15 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 
-from config import DATABASE_NAME
-from core import AGVState, BaseEnum, TaskStatus
+from config import DATABASE_BASENAME
+from core import AGVState, MemoryAccessMessages, TaskStatus
 
 Base = declarative_base()
 
 
 class AGV(Base):
     __tablename__ = "agv"
+    # WILL BE THE ROS_DOMAIN_ID
     id = Column(Integer, primary_key=True)
     x = Column(Float)
     y = Column(Float)
@@ -29,7 +31,9 @@ class AGV(Base):
     # lazy = joined is eager loading and crucial to ensuring that we have access to objects outside of sessions
     current_task = relationship("Task", backref="assigned_agv", uselist=False, lazy="joined")
 
-    def __init__(self, x=None, y=None, theta=None, status=None, current_task=None):
+    def __init__(self, id=None, x=None, y=None, theta=None, status=None, current_task=None):
+        if id is not None:
+            self.id = id
         self.x = x if x is not None else 0.0
         self.y = y if y is not None else 0.0
         self.theta = theta if theta is not None else 0.0
@@ -59,7 +63,9 @@ class Task(Base):
             return 0
         return len(self.waypoints)
 
-    def __init__(self, status=None):
+    def __init__(self, id=None, status=None):
+        if id is not None:
+            self.id = id
         if status is not None:
             self.status = status
         else:
@@ -78,7 +84,9 @@ class Waypoint(Base):
     y = Column(Float)
     task_id = Column(Integer, ForeignKey("task.id"))
 
-    def __init__(self, x=None, y=None, order=None, visited=None):
+    def __init__(self, id=None, x=None, y=None, order=None, visited=None):
+        if id is not None:
+            self.id = id
         self.x = x if x is not None else 0.0
         self.y = y if y is not None else 0.0
         self.order = order if order is not None else 0
@@ -90,7 +98,14 @@ class Waypoint(Base):
 
 # https://stackoverflow.com/questions/25156264/sqlalchemy-using-decorator-to-provide-thread-safe-session-for-multiple-function
 def thread_safe_db_access(func):
-    engine = create_engine(DATABASE_NAME)
+
+    ros_domain_id = (
+        os.environ.get("ROS_DOMAIN_ID", None)
+        if os.environ.get("ROS_DOMAIN_ID", None) is not None
+        else 1
+    )
+    agv_memory_db_name = f"{DATABASE_BASENAME}_{ros_domain_id}"
+    engine = create_engine(agv_memory_db_name)
     Base.metadata.create_all(bind=engine)
     session_factory = sessionmaker(bind=engine)
     Session = scoped_session(session_factory)
@@ -104,7 +119,6 @@ def thread_safe_db_access(func):
         except:
             session.rollback()
         finally:
-            # session.expunge_all()
             Session.remove()
         return result
 
@@ -127,19 +141,25 @@ class Memory:
     # Creation Methods
     @classmethod
     @thread_safe_db_access
-    def create_agv_state(cls, session=None):
+    def create_agv_state(cls, id=None, session=None):
         # ensure there only exists one definition of the AGV at a time!
         agv = session.query(AGV).first()
         if agv is not None:
             return
-        agv = AGV()
+        if id is not None:
+            agv = AGV(id=id)
+        else:
+            agv = AGV()
         session.add(agv)
 
     @classmethod
     @thread_safe_db_access
-    def create_task(cls, waypoints, status=TaskStatus.INCOMPLETE, session=None):
+    def create_task(cls, waypoints, id=None, status=TaskStatus.INCOMPLETE, session=None):
         # for now, waypoints will be [(x,y,order)], before I assign them to a serialzer!
-        task = Task(status=status)
+        if id is not None:
+            task = Task(id=id, status=status)
+        else:
+            task = Task(status=status)
         session.add(task)
         for waypoint in waypoints:
             x, y, order = waypoint
@@ -186,10 +206,38 @@ class Memory:
 
     @classmethod
     @thread_safe_db_access
+    def get_next_task_waypoint(cls, session=None):
+        agv = session.query(AGV).first()
+        current_task = agv.current_task
+        if current_task is None:
+            print(f"Task registered to AGV with id: {current_task.id} could not be found")
+            return None
+        unvisited_ordered_waypoints = (
+            session.query(Waypoint)
+            .filter_by(task_id=current_task.id, visited=False)
+            .order_by(Waypoint.order.asc())
+            .all()
+        )
+        if len(unvisited_ordered_waypoints) == 0:
+            return []
+        next_waypoint = unvisited_ordered_waypoints[0]
+        session.expunge(next_waypoint)
+        return next_waypoint
+
+    @classmethod
+    @thread_safe_db_access
     def update_agv_state(
-        cls, x=None, y=None, theta=None, status=None, current_task_id=None, session=None
+        cls,
+        id=None,
+        x=None,
+        y=None,
+        theta=None,
+        status=None,
+        session=None,
     ):
         agv = session.query(AGV).first()
+        if id is not None:
+            agv.id = id
         if x is not None:
             agv.x = x
         if y is not None:
@@ -198,30 +246,48 @@ class Memory:
             agv.theta = theta
         if status is not None:
             agv.status = status
+
+    @classmethod
+    @thread_safe_db_access
+    def update_agv_current_task(cls, current_task_id=None, session=None):
+        agv = session.query(AGV).first()
         if current_task_id is not None:
             task = session.query(Task).filter_by(id=current_task_id).first()
-            if task is not None:
-                agv.current_task = task
+            if task is None:
+                print(f"Task with id:{current_task_id} does not exist!")
+                return
+            agv.current_task = task
+            session.merge(agv)
+        else:
+            agv.current_task = None
+            session.merge(agv)
 
     @classmethod
     @thread_safe_db_access
-    def update_agv_current_task_status(cls, status=None, session=None):
-        agv = session.query(AGV).first()
-        task = agv.current_task
-        if task is None:
+    def update_task(cls, id=None, status=None, session=None):
+        if id is None:
+            print("Task ID not provided")
+            return
+        current_task = session.query(Task).filter_by(id=id).first()
+        if current_task is None:
+            print("Invalid Task ID provided")
             return
         if type(status) is not TaskStatus:
+            print("[status] provided must be of type: TaskStatus")
             return
-        task.status = status
+        current_task.status = status
 
     @classmethod
     @thread_safe_db_access
-    def update_current_waypoint(cls, visited=False, session=None):
-        agv = session.query(AGV).first()
-        current_waypoint = agv.current_waypoint
-        if current_waypoint is None:
+    def update_waypoint(cls, id=None, visited=False, session=None):
+        if id is None:
+            print("Waypoint ID not provided")
             return
-        current_waypoint.visited = visited
+        waypoint = session.query(Waypoint).filter_by(id=id).first()
+        if waypoint is None:
+            print("Invalid Waypoint ID provided")
+            return
+        waypoint.visited = visited
 
     @classmethod
     def _expunge_query_statement(cls, session=None, query=None):
