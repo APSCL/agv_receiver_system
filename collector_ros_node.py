@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import logging
+import os
 import time
 from collections import defaultdict
 from functools import partial
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 def turtle1_pose_handler(pose):
     print(f"Message: {pose}")
+    print(Memory.get_agv())
     x, y, theta = pose.x, pose.y, pose.theta
     Memory.update_agv_state(x=x, y=y, theta=theta)
 
@@ -45,6 +47,7 @@ TOPICS = [
 ]
 
 
+# NOTE THAT THIS SCRIPT MUST ALWAYS RUN FIRST!!
 class InformationRetrievalHandler:
     @classmethod
     def handle_message(cls, topic_name, message):
@@ -67,10 +70,12 @@ class InformationRetrievalSubscription:
 class InformationRetrievalNode(Node):
     def __init__(self):
         super().__init__(f"information_retrieval_node")
+        ros_domain_id = os.environ.get("ROS_DOMAIN_ID")
+        print(f"Starting Information Retrieval for AGV with ROS_DOMAIN_ID:{ros_domain_id}")
         self.node_subscriptions = defaultdict(lambda: InformationRetrievalSubscription())
-
         Memory.wipe_database()
         Memory.create_agv_state()
+        Memory.update_agv_state(id=ros_domain_id)
 
         # partial used to pass in the topic_name for the handler
         for topic in TOPICS:

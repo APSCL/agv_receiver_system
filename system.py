@@ -1,117 +1,152 @@
+import os
+import threading
 import time
+from http import HTTPStatus
 
-from communications import WaypointServerCommunicator
+import rclpy
+
+from communications import (
+    MockWaypointJSONParser,
+    MockWaypointServerCommunicator,
+    WaypointJSONParser,
+    WaypointServerCommunicator,
+)
 from config import INTER_ITERATION_PERIOD_SECONDS
-from core import AGVState, TaskStatus
+from core import AGVActionMessages, AGVState, MemoryAccessMessages, TaskStatus
 from memory import AGV, Memory, Task, Waypoint
-from serailizers import Serializer
+from ros_turtlesim_nav import TurtleSimNavigationPublisher
 
-GRID = [(1, 10), (5.5, 10), (10, 10), (1, 5.5), (5.5, 5.5), (10, 5.5)(1, 1), (5.5, 1), (10, 1)]
+
+# define threading function up here! (to write that the current waypoint is visited!)
+def send_navigation_proccess_to_background_test(nav_controller, next_waypoint):
+    # get all current coordinates
+    print(f"Navigating to! x:{next_waypoint.x} y:{next_waypoint.y}")
+    agv = Memory.get_agv()
+    current_x, current_y, current_theta = agv.x, agv.y, agv.theta
+    goal_x, goal_y, waypoint_id = next_waypoint.x, next_waypoint.y, next_waypoint.id
+    nav_controller.navigate_to(current_x, current_y, current_theta, goal_x, goal_y)
+    # update the waypoint as visited (this will cause a change in the behavior of the AGV)
+    Memory.update_waypoint(id=next_waypoint.id, visited=True)
+
+
+def send_navigation_process_to_background(coordinates):
+    pass
+
+
+# TODO: make this into a graph datastructure
+GRID = [(1, 10), (5.5, 10), (10, 10), (1, 5.5), (5.5, 5.5), (10, 5.5), (1, 1), (5.5, 1), (10, 1)]
 
 # NEXT STEP (MOCK [COMMUNICATION CLASS] - THE SERVER and FEED IN TASKS - then do the server)
 
 
 class AGVController:
-    def __init__(self):
-        pass
+    def __init__(self, testing=False):
+        self._init_navigation()
+        if testing:
+            self.communicator = MockWaypointServerCommunicator()
+            self.parser = MockWaypointJSONParser()
+            self.navigator = TurtleSimNavigationPublisher()
+            self.navigation_function = send_navigation_proccess_to_background_test
+        else:
+            self.communicator = WaypointServerCommunicator()
+            self.parser = WaypointJSONParser()
+            self.navigator = TurtleSimNavigationPublisher()
+            self.navigation_function = send_navigation_proccess_to_background_test
+
+        self.navigation_thread = None
+
+    def _init_navigation(self):
+        rclpy.init()
 
     def perform_waypoint_registration(self):
-        # WaypointServerCommunicator.register_agv()
-        print("In Registration")
+        Memory.update_agv_state(status=AGVState.READY)
+        registration_successful = self.communicator.register_agv()
+        # perform any other initialization tasks here
+        return registration_successful
 
     def perform_action(self):
-        # print out the agv state
         agv = Memory.get_agv()
-        print(agv)
         agv_status = agv.status
         # perform "handshake" - STANDARD agv state update and recieve any information in return
+        command = self.communicator.send_internal_state_update()
+        # direct command processing from the server! (to be implemented)
         status_to_action = {
             AGVState.READY: self.perform_ready_action,
             AGVState.BUSY: self.perform_busy_action,
             AGVState.DONE: self.perform_done_action,
         }
         action_function = status_to_action[agv_status]
-        res = action_function()
+        action_result = action_function()
+        print(f"Result of {agv_status} function: {action_result}")
+        # handle errors from action functions
 
     def perform_ready_action(self):
-        print("In Ready Action")
-        # ping server for a task
-        # parse and respond to output
-        # 1. Recieve a task
-        # - Create task with waypoints in Internal State
-        # - Assign the Task to the AGV
-        # - Change and update the internal state of the AGV to BUSY
-        # - Start moving towards the first waypoint
-        # 2. No Task Recieved
-        # - Do nothing and keep waiting patiently
-        pass
+        status_code, task_json = self.communicator.get_task()
+
+        if status_code is not HTTPStatus.OK:
+            # means there is no task to recieve, so we continue patiently waiting
+            return AGVActionMessages.UNABLE_TO_RETRIEVE_TASK
+
+        if self.parser.no_tasks_available(task_json):
+            return AGVActionMessages.SUCCESS
+
+        self.parser.process_new_task(task_json)
+        # start navigation towards the first waypoint, and background the navigation
+        next_task = Memory.get_next_task()
+        next_task_waypoint = Memory.get_next_task_waypoint()
+        # if for some reason, the Task has no waypoints associated with it, we just mark the task as "complete"
+        if next_task_waypoint is None:
+            print("Task has no waypoints associated with it, proceeding to mark it as complete")
+            Memory.update_task(id=next_task.id, status=TaskStatus.COMPLETE)
+            Memory.update_agv_state(status=AGVState.DONE)
+            return AGVActionMessages.SUCCESS
+
+        self.navigation_thread = threading.Thread(
+            target=send_navigation_proccess_to_background_test,
+            args=(self.navigator, next_task_waypoint),
+        )
+        self.navigation_thread.start()
+        return AGVActionMessages.SUCCESS
 
     def perform_busy_action(self):
-        print("In Busy Action")
-        # if task cancelled - delete all other remaining waypoints through visitation
-        # check if we are "close enough" to our current objective waypoint
-        # if so mark current object waypoint as visited
-        # check if there is another waypoint to visit
-        # if yes
-        # Navigate to the next waypoint [END]
-        # if no
-        # mark internal status as done
-        pass
+        # check if we finished visting our currernt objective waypoint
+        next_task = Memory.get_next_task()
+        next_task_waypoint = Memory.get_next_task_waypoint()
+        if self.navigation_thread.is_alive():
+            return AGVActionMessages.SUCCESS
+
+        if next_task_waypoint == []:
+            Memory.update_task(id=next_task.id, status=TaskStatus.COMPLETE)
+            Memory.update_agv_state(status=AGVState.DONE)
+            return AGVActionMessages.SUCCESS
+
+        # else navigate to the next waypoint
+        self.navigation_thread = threading.Thread(
+            target=self.navigation_function, args=(self.navigator, next_task_waypoint), daemon=True
+        )
+        self.navigation_thread.start()
+        return AGVActionMessages.SUCCESS
 
     # reason for dividing these states: want to reduce the total amount of network calls per step!
     def perform_done_action(self):
-        print("In Done Action")
-        # Internal Clean up for memory
-        # Indicate to the server that the task is complete
-        # Put the AGV in the Ready State Again
-        pass
-
-    # TODO: Adapt these messages for the system rather than memory!
-
-    # @classmethod
-    # def get_current_task_current_waypoint(cls, session=None):
-    #     if not cls.current_task_exists():
-    #         return None
-    #     waypoints = cls.get_current_task_waypoints(only_unvisited=True)
-    #     if waypoints:
-    #         return waypoints[0]
-    #     return None
-
-    # @classmethod
-    # @thread_safe_db_access
-    # def current_task_exists(cls, session=None):
-    #     agv = session.query(AGV).first()
-    #     current_task = agv.current_task
-    #     if current_task is None:
-    #         return False
-    #     return True
-
-    # @classmethod
-    # @thread_safe_db_access
-    # def get_current_task_waypoints(cls, only_unvisited=False, session=None):
-    #     if not cls.current_task_exists():
-    #         return []
-    #     agv = session.query(AGV).first()
-    #     current_task_id = agv.current_task
-    #     filter_kwargs = {"task_id": current_task_id}
-    #     if only_unvisited:
-    #         filter_kwargs["visited"] = False
-    #     waypoints = (
-    #         session.query(Waypoint).filter_by(**filter_kwargs).order_by(Waypoint.order.asc()).all()
-    #     )
-    #     session.expunge_all()
-    #     return waypoints
+        Memory.update_agv_state(status=AGVState.READY)
+        Memory.update_agv_current_task(current_task_id=None)
+        return AGVActionMessages.SUCCESS
 
 
 def main():
-    controller = AGVController()
+    controller = AGVController(testing=True)
+    # set local ROS_DOMAIN_ID variable to the running AGV - THIS IS NOW HANDLED IN THE CALLING SCRIPT
     # register AGV to the server
-    print("IM IN THE SYSTEM!!")
-    controller.perform_waypoint_registration()
+    resistration_success = controller.perform_waypoint_registration()
+    # if True:
+    #     print("registration failure")
+    #     return
+    # we will be running data collection with ROS before hand, but we want to make sure the AGV's current position
+    # time.sleep(INTER_ITERATION_PERIOD_SECONDS)
     while True:
         controller.perform_action()
         time.sleep(INTER_ITERATION_PERIOD_SECONDS)
-    controller.memory.close()
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
-WAYPOINT_SERVER_IP = "0.0.0.0"
-TEST_WAYPOINT_SERVER_IP = "0.0.0.0"
+WAYPOINT_SERVER_IP = "10.19.4.19"
+WAYPOINT_SERVER_PORT = "5000"
+TEST_WAYPOINT_SERVER_IP = "10.19.4.19"
 
 # how often to recieve updates from turtle bot, and therefore write to in memeory DB
 SAMPLE_PERIOD_SECONDS = 2.5
@@ -11,4 +12,4 @@ QOS_PROFILE = 10
 INTER_ITERATION_PERIOD_SECONDS = 5
 
 # internal database name
-DATABASE_NAME = "sqlite:///state.db"
+DATABASE_BASENAME = "sqlite:///states/state.db"
