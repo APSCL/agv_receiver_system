@@ -219,7 +219,7 @@ class Memory:
             .all()
         )
         if len(unvisited_ordered_waypoints) == 0:
-            return []
+            return None
         next_waypoint = unvisited_ordered_waypoints[0]
         session.expunge(next_waypoint)
         return next_waypoint

@@ -6,6 +6,7 @@ from http import HTTPStatus
 from geometry_msgs.msg import PoseStamped
 import rclpy
 from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+from rclpy.duration import Duration
 
 
 from communications import (
@@ -19,13 +20,14 @@ from core import AGVActionMessages, AGVState, MemoryAccessMessages, TaskStatus
 from memory import AGV, Memory, Task, Waypoint
 from ros_turtlesim_nav import TurtleSimNavigationPublisher
 
-def navigate_to_way_point(navigator, waipoint):
+def navigate_to_way_point(navigator, waypoint):
     # nav2 simple commander
+    import pdb; pdb.set_trace()
     goal_pose = PoseStamped()
     goal_pose.header.frame_id = 'map'
     goal_pose.header.stamp = navigator.get_clock().now().to_msg()
-    goal_pose.pose.position.x = next_waypoint.x
-    goal_pose.pose.position.y = next_waypoint.y
+    goal_pose.pose.position.x = waypoint.x
+    goal_pose.pose.position.y = waypoint.y
     goal_pose.pose.orientation.w = 1.0
 
     navigator.goToPose(goal_pose)
@@ -70,7 +72,6 @@ def navigate_to_way_point(navigator, waipoint):
 # define threading function up here! (to write that the current waypoint is visited!)
 def send_navigation_proccess_to_background_test(navigator, next_waypoint):
     # get all current coordinates
-    # import pdb; pdb.set_trace()
     print(f"Navigating to! x:{next_waypoint.x} y:{next_waypoint.y}")
     navigate_to_way_point(navigator, next_waypoint)
     # nav_controller.navigate_to(current_x, current_y, current_theta, goal_x, goal_y)
@@ -135,19 +136,19 @@ class AGVController:
         }
         action_function = status_to_action[agv_status]
         action_result = action_function()
-        print(f"Result of {agv_status} function: {action_result}")
+        # print(f"Result of {agv_status} function: {action_result}")
         # handle errors from action functions
 
     def perform_ready_action(self):
         status_code, task_json = self.communicator.get_task()
-
-        if status_code is not HTTPStatus.OK:
+        
+        if status_code != 200:
             # means there is no task to recieve, so we continue patiently waiting
             return AGVActionMessages.UNABLE_TO_RETRIEVE_TASK
 
-        if self.parser.no_tasks_available(task_json):
+        if self.parser.no_tasks_available(status_code):
             return AGVActionMessages.SUCCESS
-
+        # import pdb; pdb.set_trace()
         self.parser.process_new_task(task_json)
         # start navigation towards the first waypoint, and background the navigation
         next_task = Memory.get_next_task()
@@ -158,7 +159,7 @@ class AGVController:
             Memory.update_task(id=next_task.id, status=TaskStatus.COMPLETE)
             Memory.update_agv_state(status=AGVState.DONE)
             return AGVActionMessages.SUCCESS
-
+        Memory.update_task(id=next_task.id, status=TaskStatus.IN_PROGRESS)
         self.navigation_thread = threading.Thread(
             target=send_navigation_proccess_to_background_test,
             args=(self.navigator, next_task_waypoint),
