@@ -3,7 +3,10 @@ import threading
 import time
 from http import HTTPStatus
 
+from geometry_msgs.msg import PoseStamped
 import rclpy
+from nav2_simple_commander.robot_navigator import BasicNavigator, TaskResult
+
 
 from communications import (
     MockWaypointJSONParser,
@@ -16,15 +19,61 @@ from core import AGVActionMessages, AGVState, MemoryAccessMessages, TaskStatus
 from memory import AGV, Memory, Task, Waypoint
 from ros_turtlesim_nav import TurtleSimNavigationPublisher
 
+def navigate_to_way_point(navigator, waipoint):
+    # nav2 simple commander
+    goal_pose = PoseStamped()
+    goal_pose.header.frame_id = 'map'
+    goal_pose.header.stamp = navigator.get_clock().now().to_msg()
+    goal_pose.pose.position.x = next_waypoint.x
+    goal_pose.pose.position.y = next_waypoint.y
+    goal_pose.pose.orientation.w = 1.0
+
+    navigator.goToPose(goal_pose)
+
+    i = 0
+    while not navigator.isTaskComplete():
+        ################################################
+        #
+        # Implement some code here for your application!
+        #
+        ################################################
+
+        # Do something with the feedback
+        i = i + 1
+        feedback = navigator.getFeedback()
+        if feedback and i % 5 == 0:
+            print('Estimated time of arrival: ' + '{0:.0f}'.format(
+                  Duration.from_msg(feedback.estimated_time_remaining).nanoseconds / 1e9)
+                  + ' seconds.')
+
+            # Some navigation timeout to demo cancellation
+            if Duration.from_msg(feedback.navigation_time) > Duration(seconds=600.0):
+                navigator.cancelTask()
+
+            # Some navigation request change to demo preemption
+            if Duration.from_msg(feedback.navigation_time) > Duration(seconds=18.0):
+                goal_pose.pose.position.x = -3.0
+                navigator.goToPose(goal_pose)
+
+    # Do something depending on the return code
+    result = navigator.getResult()
+    if result == TaskResult.SUCCEEDED:
+        print('Goal succeeded!')
+    elif result == TaskResult.CANCELED:
+        print('Goal was canceled!')
+    elif result == TaskResult.FAILED:
+        print('Goal failed!')
+    else:
+        print('Goal has an invalid return status!')
+    # end
 
 # define threading function up here! (to write that the current waypoint is visited!)
-def send_navigation_proccess_to_background_test(nav_controller, next_waypoint):
+def send_navigation_proccess_to_background_test(navigator, next_waypoint):
     # get all current coordinates
+    # import pdb; pdb.set_trace()
     print(f"Navigating to! x:{next_waypoint.x} y:{next_waypoint.y}")
-    agv = Memory.get_agv()
-    current_x, current_y, current_theta = agv.x, agv.y, agv.theta
-    goal_x, goal_y, waypoint_id = next_waypoint.x, next_waypoint.y, next_waypoint.id
-    nav_controller.navigate_to(current_x, current_y, current_theta, goal_x, goal_y)
+    navigate_to_way_point(navigator, next_waypoint)
+    # nav_controller.navigate_to(current_x, current_y, current_theta, goal_x, goal_y)
     # update the waypoint as visited (this will cause a change in the behavior of the AGV)
     Memory.update_waypoint(id=next_waypoint.id, visited=True)
 
@@ -32,12 +81,10 @@ def send_navigation_proccess_to_background_test(nav_controller, next_waypoint):
 def send_navigation_process_to_background(coordinates):
     pass
 
-
 # TODO: make this into a graph datastructure
 GRID = [(1, 10), (5.5, 10), (10, 10), (1, 5.5), (5.5, 5.5), (10, 5.5), (1, 1), (5.5, 1), (10, 1)]
 
 # NEXT STEP (MOCK [COMMUNICATION CLASS] - THE SERVER and FEED IN TASKS - then do the server)
-
 
 class AGVController:
     def __init__(self, testing=False):
@@ -50,13 +97,24 @@ class AGVController:
         else:
             self.communicator = WaypointServerCommunicator()
             self.parser = WaypointJSONParser()
-            self.navigator = TurtleSimNavigationPublisher()
+            self.navigator = BasicNavigator()
+            self.agv_set_initial_pose()
             self.navigation_function = send_navigation_proccess_to_background_test
 
         self.navigation_thread = None
 
     def _init_navigation(self):
         rclpy.init()
+
+    def agv_set_initial_pose(self):
+        initial_pose = PoseStamped()
+        initial_pose.header.frame_id = 'map'
+        initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
+        initial_pose.pose.position.x = 0.0
+        initial_pose.pose.position.y = 0.0
+        initial_pose.pose.orientation.z = 1.0
+        initial_pose.pose.orientation.w = 0.0
+        self.navigator.setInitialPose(initial_pose)
 
     def perform_waypoint_registration(self):
         Memory.update_agv_state(status=AGVState.READY)
@@ -135,7 +193,7 @@ class AGVController:
 
 
 def main():
-    controller = AGVController(testing=True)
+    controller = AGVController(testing=False)
     # set local ROS_DOMAIN_ID variable to the running AGV - THIS IS NOW HANDLED IN THE CALLING SCRIPT
     # register AGV to the server
     resistration_success = controller.perform_waypoint_registration()
