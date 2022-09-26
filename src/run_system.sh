@@ -1,3 +1,4 @@
+#!/bin/bash
 source /opt/ros/galactic/setup.bash
 # set environment variable for ROS_DOMAIN_ID to be i or something (for different parts!)
 
@@ -9,7 +10,7 @@ do
         s)
           python_script_name=${OPTARG};
           echo $python_script_name
-          if ["$python_script_name" != "system.py" && "$python_script_name" != "collector_ros_node.py"]; 
+          if ["$python_script_name" != "./src/system.py" && "$python_script_name" != "./src/collector_ros_node.py"]; 
           then
             echo "script usage: $(basename \$0) [-d ROS_DOMAIN_ID] [is SCRIPT_NAME (system.py|collector_ros_node.py)]" >&2
             exit 1
