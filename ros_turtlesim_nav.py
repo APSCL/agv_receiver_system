@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import logging
+import os
 import time
 from distutils.log import debug
 
@@ -60,9 +61,10 @@ class TurtleSimNavigationPublisher(Node):
             )
 
         self._rotate(diff_theta)
-        self._move_forward(goal_distance, goal_theta)
+        self._move_forward(goal_distance)
 
     def _rotate(self, theta):
+        print(os.environ.get("ROS_DOMAIN_ID"))
         vel_msg = self._init_twist_message()
         # CW is (-1), and CCW is (1)
         vel_msg.angular.z = float(np.sign(theta) * ANG_SPEED)
@@ -81,12 +83,12 @@ class TurtleSimNavigationPublisher(Node):
                 debug_counter = 0
                 print(current_angle)
             debug_counter += 1
-        print(current_angle)
         # Force Robot to stop
         vel_msg.angular.z = 0.0
         self.velocity_publisher.publish(vel_msg)
 
-    def _move_forward(self, distance, theta):
+    def _move_forward(self, distance):
+        print(os.environ.get("ROS_DOMAIN_ID"))
         vel_msg = self._init_twist_message()
         # adjust with theta
 
@@ -111,7 +113,6 @@ class TurtleSimNavigationPublisher(Node):
                 debug_counter = 0
                 print(current_distance)
             debug_counter += 1
-        print(current_distance)
         # After the loop, stops the robot
         vel_msg.linear.x = 0.0
         # Force the robot to stop

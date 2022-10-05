@@ -1,5 +1,5 @@
+import multiprocessing
 import os
-import threading
 import time
 from http import HTTPStatus
 
@@ -12,7 +12,7 @@ from communications import (
     WaypointServerCommunicator,
 )
 from config import INTER_ITERATION_PERIOD_SECONDS
-from core import AGVActionMessages, AGVState, MemoryAccessMessages, TaskStatus
+from core import AGVActionMessages, AGVState, TaskStatus, TracedThread
 from memory import AGV, Memory, Task, Waypoint
 from ros_turtlesim_nav import TurtleSimNavigationPublisher
 
@@ -33,12 +33,6 @@ def send_navigation_process_to_background(coordinates):
     pass
 
 
-# TODO: make this into a graph datastructure
-GRID = [(1, 10), (5.5, 10), (10, 10), (1, 5.5), (5.5, 5.5), (10, 5.5), (1, 1), (5.5, 1), (10, 1)]
-
-# NEXT STEP (MOCK [COMMUNICATION CLASS] - THE SERVER and FEED IN TASKS - then do the server)
-
-
 class AGVController:
     def __init__(self, testing=False):
         self._init_navigation()
@@ -53,7 +47,7 @@ class AGVController:
             self.navigator = TurtleSimNavigationPublisher()
             self.navigation_function = send_navigation_proccess_to_background_test
 
-        self.navigation_thread = None
+        self.navigation_process = None
 
     def _init_navigation(self):
         rclpy.init()
@@ -74,10 +68,15 @@ class AGVController:
             # implement error handling later
             print(response_json)
         # direct command processing from the server! (to be implemented)
+        command_processed = self.parser.process_command(response_json)
+        if command_processed:
+            self.navigation_process.kill() 
+            return
         status_to_action = {
             AGVState.READY: self.perform_ready_action,
             AGVState.BUSY: self.perform_busy_action,
             AGVState.DONE: self.perform_done_action,
+            AGVState.STOPPED: self.perform_stopped_action,
         }
         action_function = status_to_action[agv_status]
         action_result = action_function()
@@ -107,11 +106,12 @@ class AGVController:
 
         # else mark the task as in progress and begin navigating to the next waypoint
         Memory.update_task(id=next_task.id, status=TaskStatus.IN_PROGRESS)
-        self.navigation_thread = threading.Thread(
+        
+        self.navigation_process = TracedThread(
             target=send_navigation_proccess_to_background_test,
             args=(self.navigator, next_task_waypoint),
         )
-        self.navigation_thread.start()
+        self.navigation_process.start()
 
         return AGVActionMessages.SUCCESS
 
@@ -120,7 +120,7 @@ class AGVController:
         agv = Memory.get_agv()
         current_task = agv.current_task
         next_task_waypoint = Memory.get_next_task_waypoint()
-        if self.navigation_thread.is_alive():
+        if self.navigation_process.is_alive():
             return AGVActionMessages.SUCCESS
 
         if next_task_waypoint is None:
@@ -128,17 +128,20 @@ class AGVController:
             Memory.update_agv_state(status=AGVState.DONE)
             return AGVActionMessages.SUCCESS
 
-        # else navigate to the next waypoint
-        self.navigation_thread = threading.Thread(
+        self.navigation_process = TracedThread(
             target=self.navigation_function, args=(self.navigator, next_task_waypoint), daemon=True
         )
-        self.navigation_thread.start()
+        self.navigation_process.start()
         return AGVActionMessages.SUCCESS
 
     # reason for dividing these states: want to reduce the total amount of network calls per step!
     def perform_done_action(self):
         Memory.update_agv_state(status=AGVState.READY)
         Memory.update_agv_current_task(current_task_id=None)
+        return AGVActionMessages.SUCCESS
+
+    # This state serves as a lock that is inescapable unless the AGV recieves a command to release it
+    def perform_stopped_action(self):
         return AGVActionMessages.SUCCESS
 
 

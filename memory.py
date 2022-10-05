@@ -124,7 +124,6 @@ def thread_safe_db_access(func):
 
     return inner
 
-
 # TODO: Figure out how to create sessions and then close them!!
 # TODO: Description - two different instances
 # TODO: First Draft - EDIT LATER (maybe make each funtion a dynamic memory query instead!! (create filter statemetns with kwarsg etc))
@@ -165,6 +164,22 @@ class Memory:
             x, y, order = waypoint
             task.waypoints.append(Waypoint(x=x, y=y, order=order, visited=False))
             session.merge(task)
+
+    @classmethod
+    @thread_safe_db_access
+    def delete_task(cls, id=None, current_task=False, session=None):
+        # for now, waypoints will be [(x,y,order)], before I assign them to a serialzer!
+        if id is not None or current_task is True:
+            agv = session.query(AGV).first()
+            id = agv.current_task.id if agv.current_task is not None else None
+        if id is None:
+            return
+        task_to_delete = session.query(Task).filter_by(id=id).first()
+        if task_to_delete is None:
+            return
+        for waypoint in task_to_delete.waypoints:
+            session.delete(waypoint)
+        session.delete(task_to_delete)
 
     # Retrieval Methods - expose objects outside of sessions (OUTSIDE, NOT INTERNAL GET)
     @classmethod

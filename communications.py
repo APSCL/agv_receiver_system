@@ -1,10 +1,11 @@
 import json
 from http import HTTPStatus
+from types import ClassMethodDescriptorType
 
 import requests
 
 from config import TEST_WAYPOINT_SERVER_IP, WAYPOINT_SERVER_IP, WAYPOINT_SERVER_PORT
-from core import AGVState
+from core import AGVState, CommandTypes
 from memory import Memory
 
 
@@ -113,10 +114,55 @@ class WaypointJSONParser:
         # it's important to create it with the task id from the waypoint server, so it can be identified later!
         Memory.create_task(parsed_waypoints, id=task_id)
         task = Memory.get_next_task()
-        print(task)
         Memory.update_agv_state(status=AGVState.BUSY)
         Memory.update_agv_current_task(current_task_id=task.id)
-        print(Memory.get_agv())
+
+    @classmethod
+    def process_command(cls, response_json):
+        command_json = response_json.get("command", None)
+        if command_json is None:
+            return False
+
+        command_type = command_json.get("type", None)
+        if command_type is None:
+            return False
+
+        command_type_to_processing_function = {
+            str(CommandTypes.CANCEL_AGV): cls.process_cancel_task,
+            str(CommandTypes.CANCEL_TASK): cls.process_cancel_task,
+            str(CommandTypes.STOP_AGV): cls.process_stop_agv,
+            str(CommandTypes.START_AGV): cls.process_start_agv,
+        }
+        processing_function = command_type_to_processing_function.get(command_type, None)
+        if processing_function is None:
+            return False
+        processing_function()
+        return True
+    
+    @classmethod
+    def process_cancel_task(cls):
+        # remove the current task from the database (because it may have to exist within the AGV's internal database again)
+        Memory.delete_task(current_task=True)
+        # set the AGV to recieve a new task
+        Memory.update_agv_state(status=AGVState.READY)
+        # set the AGV to no longer possess a "current_task"
+        Memory.update_agv_current_task(current_task_id=None)
+
+
+    @classmethod
+    def process_stop_agv(cls):
+        # remove the current task from the database (because it may have to exist within the AGV's internal database again)
+        Memory.delete_task(current_task=True)
+        # set the AGV to no longer possess a "current_task"
+        Memory.update_agv_current_task(current_task_id=None)
+        # set AGV into the locked "STOPPED" state cycle
+        Memory.update_agv_state(status=AGVState.STOPPED)
+
+    @classmethod
+    def process_start_agv(cls):
+        # free AGV from "STOPPED" state cycle, and prime the AGV to receive tasks again!
+        Memory.update_agv_state(status=AGVState.READY)
+
 
 
 class MockWaypointJSONParser:
@@ -135,3 +181,7 @@ class MockWaypointJSONParser:
         task = Memory.get_next_task()
         Memory.update_agv_state(status=AGVState.BUSY)
         Memory.update_agv_current_task(current_task_id=task.id)
+
+    @classmethod 
+    def process_command(cls, response_json):
+        return False
