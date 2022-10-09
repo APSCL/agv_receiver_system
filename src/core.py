@@ -1,3 +1,6 @@
+import sys
+import threading
+import trace
 from enum import Enum
 
 
@@ -5,11 +8,18 @@ class BaseEnum(Enum):
     def __str__(self):
         return self.name
 
+class CommandTypes(BaseEnum):
+    CANCEL_TASK = "CANCEL_TASK"
+    CANCEL_AGV = "CANCEL_AGV"
+    STOP_AGV = "STOP_AGV"
+    START_AGV = "START_AGV"
+
 
 class AGVState(BaseEnum):
     READY = "READY"
     BUSY = "BUSY"
     DONE = "DONE"
+    STOPPED = "STOPPED"
 
 
 class TaskStatus(BaseEnum):
@@ -32,3 +42,33 @@ class MemoryAccessMessages(BaseEnum):
 
 class WaypointServerEndpoints(BaseEnum):
     AGV_REGISTRATION = "/agvs/"
+
+class TracedThread(threading.Thread):
+  def __init__(self, *args, **keywords):
+    threading.Thread.__init__(self, *args, **keywords)
+    self.killed = False
+ 
+  def start(self):
+    self.__run_backup = self.run
+    self.run = self.__run     
+    threading.Thread.start(self)
+ 
+  def __run(self):
+    sys.settrace(self.globaltrace)
+    self.__run_backup()
+    self.run = self.__run_backup
+ 
+  def globaltrace(self, frame, event, arg):
+    if event == 'call':
+      return self.localtrace
+    else:
+      return None
+ 
+  def localtrace(self, frame, event, arg):
+    if self.killed:
+      if event == 'line':
+        raise SystemExit()
+    return self.localtrace
+ 
+  def kill(self):
+    self.killed = True
