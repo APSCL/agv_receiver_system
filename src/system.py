@@ -22,7 +22,7 @@ from ros_turtlesim_nav import TurtleSimNavigationPublisher
 
 def navigate_to_way_point(navigator, waypoint):
     # nav2 simple commander
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
     goal_pose = PoseStamped()
     goal_pose.header.frame_id = 'map'
     goal_pose.header.stamp = navigator.get_clock().now().to_msg()
@@ -49,13 +49,13 @@ def navigate_to_way_point(navigator, waypoint):
                   + ' seconds.')
 
             # Some navigation timeout to demo cancellation
-            if Duration.from_msg(feedback.navigation_time) > Duration(seconds=600.0):
-                navigator.cancelTask()
+            # if Duration.from_msg(feedback.navigation_time) > Duration(seconds=600.0):
+            #     navigator.cancelTask()
 
-            # Some navigation request change to demo preemption
-            if Duration.from_msg(feedback.navigation_time) > Duration(seconds=18.0):
-                goal_pose.pose.position.x = -3.0
-                navigator.goToPose(goal_pose)
+            # # Some navigation request change to demo preemption
+            # if Duration.from_msg(feedback.navigation_time) > Duration(seconds=18.0):
+            #     goal_pose.pose.position.x = -3.0
+            #     navigator.goToPose(goal_pose)
 
     # Do something depending on the return code
     result = navigator.getResult()
@@ -154,6 +154,7 @@ class AGVController:
         next_task = Memory.get_next_task()
         next_task_waypoint = Memory.get_next_task_waypoint()
         # if for some reason, the Task has no waypoints associated with it, we just mark the task as "complete"
+        print(next_task_waypoint)
         if next_task_waypoint is None:
             print("Task has no waypoints associated with it, proceeding to mark it as complete")
             Memory.update_task(id=next_task.id, status=TaskStatus.COMPLETE)
@@ -165,17 +166,19 @@ class AGVController:
             args=(self.navigator, next_task_waypoint),
         )
         self.navigation_thread.start()
+        # self.navigation_thread.join()
         return AGVActionMessages.SUCCESS
 
     def perform_busy_action(self):
         # check if we finished visting our currernt objective waypoint
-        next_task = Memory.get_next_task()
+        agv = Memory.get_agv()
+        current_task = agv.current_task
         next_task_waypoint = Memory.get_next_task_waypoint()
         if self.navigation_thread.is_alive():
+            print("thread alive")
             return AGVActionMessages.SUCCESS
-
-        if next_task_waypoint == []:
-            Memory.update_task(id=next_task.id, status=TaskStatus.COMPLETE)
+        if next_task_waypoint is None:
+            Memory.update_task(id=current_task.id, status=TaskStatus.COMPLETE)
             Memory.update_agv_state(status=AGVState.DONE)
             return AGVActionMessages.SUCCESS
 
