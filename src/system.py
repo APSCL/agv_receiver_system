@@ -136,7 +136,7 @@ class AGVController:
         # direct command processing from the server! (to be implemented)
         command_processed = self.parser.process_command(response_json)
         if command_processed:
-            self.navigation_thread.kill() 
+            self.navigator.cancelTask()
             return
         status_to_action = {
             AGVState.READY: self.perform_ready_action,
