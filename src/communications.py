@@ -108,7 +108,7 @@ class WaypointJSONParser:
         task_id, waypoints = task_json.get("id"), task_json.get("waypoints")
         parsed_waypoints = []
         for waypoint in waypoints:
-            parsed_waypoints.append((waypoint.get("x"), waypoint.get("y"), waypoint.get("order")))
+            parsed_waypoints.append((waypoint.get("x"), waypoint.get("y"), waypoint.get("theta"), waypoint.get("order")))
 
         # it's important to create it with the task id from the waypoint server, so it can be identified later!
         Memory.create_task(parsed_waypoints, id=task_id)
