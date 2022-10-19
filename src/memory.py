@@ -47,7 +47,7 @@ class AGV(Base):
             self.status = None
 
     def __repr__(self):
-        return f"AGV | ID:{self.id} | X:{self.x} Y:{self.y} THETA: {self.theta}| STATUS: {str(self.status)}"
+        return f"AGV | ID:{self.id} | X:{self.x} Y:{self.y} 0: {self.theta}| STATUS: {str(self.status)}"
 
 
 class Task(Base):
@@ -82,18 +82,20 @@ class Waypoint(Base):
     visited = Column(Boolean)
     x = Column(Float)
     y = Column(Float)
+    theta = Column(Float)
     task_id = Column(Integer, ForeignKey("task.id"))
 
-    def __init__(self, id=None, x=None, y=None, order=None, visited=None):
+    def __init__(self, id=None, x=None, y=None, theta=None, order=None, visited=None):
         if id is not None:
             self.id = id
         self.x = x if x is not None else 0.0
         self.y = y if y is not None else 0.0
+        self.theta = theta if theta is not None else 0.0
         self.order = order if order is not None else 0
         self.visited = visited if visited is not None else False
 
     def __repr__(self):
-        return f"WAYPOINT | ID:{self.id} | TASK:{self.task_id} | X:{self.x} Y:{self.y} | ORDER:{self.order} | VISITED:{self.visited}"
+        return f"WAYPOINT | ID:{self.id} | TASK:{self.task_id} | X:{self.x} Y:{self.y} 0:{self.theta} | ORDER:{self.order} | VISITED:{self.visited}"
 
 
 # https://stackoverflow.com/questions/25156264/sqlalchemy-using-decorator-to-provide-thread-safe-session-for-multiple-function
@@ -154,15 +156,15 @@ class Memory:
     @classmethod
     @thread_safe_db_access
     def create_task(cls, waypoints, id=None, status=TaskStatus.INCOMPLETE, session=None):
-        # for now, waypoints will be [(x,y,order)], before I assign them to a serialzer!
+        # for now, waypoints will be [(x,y,theta,order)], before I assign them to a serialzer!
         if id is not None:
             task = Task(id=id, status=status)
         else:
             task = Task(status=status)
         session.add(task)
         for waypoint in waypoints:
-            x, y, order = waypoint
-            task.waypoints.append(Waypoint(x=x, y=y, order=order, visited=False))
+            x, y, theta, order = waypoint
+            task.waypoints.append(Waypoint(x=x, y=y, theta=theta, order=order, visited=False))
             session.merge(task)
 
     @classmethod
