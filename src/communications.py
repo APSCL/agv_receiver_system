@@ -45,7 +45,6 @@ class WaypointServerCommunicator:
             json=agv_update_json,
         )
         if response.ok:
-            print(response.status_code, response.json())
             return response.status_code, response.json()
         return response.status_code, response.text
 
@@ -73,7 +72,7 @@ class WaypointServerCommunicator:
 
 
 class MockWaypointServerCommunicator:
-    # used for testing!
+    # Potentially used for testing
     @classmethod
     def register_agv(cls):
         print("Attempting to register AGV to the waypoint server...")
@@ -172,10 +171,6 @@ class MockWaypointJSONParser:
     @classmethod
     def process_new_task(cls, task_json):
         # waypoints must be a [(x, y, waypoint_order_int)]
-        # parse and respond to output
-        # - Create task with waypoints in Internal State
-        # - Assign the Task to the AGV
-        # - Change and update the internal state of the AGV to BUSY
         Memory.create_task(task_json)
         task = Memory.get_next_task()
         Memory.update_agv_state(status=AGVState.BUSY)
