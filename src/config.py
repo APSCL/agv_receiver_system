@@ -13,3 +13,4 @@ INTER_ITERATION_PERIOD_SECONDS = 5
 
 # internal database name
 DATABASE_BASENAME = "sqlite:///states/state.db"
+TESTING_DATABASE_NAME = "sqlite:///tests/testing.db"

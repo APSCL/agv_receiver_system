@@ -14,7 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 
-from config import DATABASE_BASENAME
+from config import DATABASE_BASENAME, TESTING_DATABASE_NAME
 from core import AGVState, MemoryAccessMessages, TaskStatus
 
 Base = declarative_base()
@@ -100,13 +100,12 @@ class Waypoint(Base):
 
 # https://stackoverflow.com/questions/25156264/sqlalchemy-using-decorator-to-provide-thread-safe-session-for-multiple-function
 def thread_safe_db_access(func):
-
     ros_domain_id = (
         os.environ.get("ROS_DOMAIN_ID", None)
         if os.environ.get("ROS_DOMAIN_ID", None) is not None
         else 1
     )
-    agv_memory_db_name = f"{DATABASE_BASENAME}_{ros_domain_id}"
+    agv_memory_db_name = f"{DATABASE_BASENAME}_{ros_domain_id}" if not os.environ.get("TESTING", False) else TESTING_DATABASE_NAME
     engine = create_engine(agv_memory_db_name)
     Base.metadata.create_all(bind=engine)
     session_factory = sessionmaker(bind=engine)
@@ -146,12 +145,13 @@ class Memory:
         # ensure there only exists one definition of the AGV at a time!
         agv = session.query(AGV).first()
         if agv is not None:
-            return
+            return False, "AGV definition already exists within internal memory"
         if id is not None:
             agv = AGV(id=id)
         else:
             agv = AGV()
         session.add(agv)
+        return True, "AGV Creation Success"
 
     @classmethod
     @thread_safe_db_access
@@ -166,6 +166,8 @@ class Memory:
             x, y, theta, order = waypoint
             task.waypoints.append(Waypoint(x=x, y=y, theta=theta, order=order, visited=False))
             session.merge(task)
+
+        return True, "Task Creation Success"
 
     @classmethod
     @thread_safe_db_access
@@ -208,7 +210,6 @@ class Memory:
             .first()
         )
         task_waypoints = session.query(Waypoint).filter_by(task_id=task.id).all()
-
         # expose task waypoints
         session.expunge(task)
         cls._expunge_query_statement(session=session, query=task_waypoints)
@@ -227,7 +228,6 @@ class Memory:
         agv = session.query(AGV).first()
         current_task = agv.current_task
         if current_task is None:
-            print(f"Task registered to AGV with id: {current_task.id} could not be found")
             return None
         unvisited_ordered_waypoints = (
             session.query(Waypoint)
@@ -241,6 +241,13 @@ class Memory:
         session.expunge(next_waypoint)
         return next_waypoint
 
+    @classmethod
+    @thread_safe_db_access
+    def get_all_waypoints(cls, session=None):
+        waypoints = session.query(Waypoint).all()
+        cls._expunge_query_statement(session=session, query=waypoints)
+        return waypoints
+        
     @classmethod
     @thread_safe_db_access
     def update_agv_state(
@@ -271,40 +278,38 @@ class Memory:
         if current_task_id is not None:
             task = session.query(Task).filter_by(id=current_task_id).first()
             if task is None:
-                print(f"Task with id:{current_task_id} does not exist!")
-                return
+                return False, "Task with provided id does not exist!"
             agv.current_task = task
             session.merge(agv)
-        else:
-            agv.current_task = None
-            session.merge(agv)
+            return True, None
+        
+        agv.current_task = None
+        session.merge(agv)
+        return True, None
 
     @classmethod
     @thread_safe_db_access
     def update_task(cls, id=None, status=None, session=None):
         if id is None:
-            print("Task ID not provided")
-            return
+            return False, "Task ID not provided"
         current_task = session.query(Task).filter_by(id=id).first()
         if current_task is None:
-            print("Invalid Task ID provided")
-            return
+            return False, "Invalid Task ID provided"
         if type(status) is not TaskStatus:
-            print("[status] provided must be of type: TaskStatus")
-            return
+            return False, "[status] provided must be of type: TaskStatus"
         current_task.status = status
+        return True, None
 
     @classmethod
     @thread_safe_db_access
     def update_waypoint(cls, id=None, visited=False, session=None):
         if id is None:
-            print("Waypoint ID not provided")
-            return
+            return False, "Waypoint ID not provided"
         waypoint = session.query(Waypoint).filter_by(id=id).first()
         if waypoint is None:
-            print("Invalid Waypoint ID provided")
-            return
+            return False, "Invalid Waypoint ID provided"
         waypoint.visited = visited
+        return True, None
 
     @classmethod
     def _expunge_query_statement(cls, session=None, query=None):
