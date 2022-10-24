@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+import math
 from http import HTTPStatus
 
 import rclpy
@@ -26,15 +27,35 @@ from memory import AGV, Memory, Task, Waypoint
 from ros_turtlesim_nav import TurtleSimNavigationPublisher
 
 
+
+def quaternion_from_euler(roll, pitch, yaw):
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+
+    q = [0] * 4
+    q[0] = cy * cp * cr + sy * sp * sr
+    q[1] = cy * cp * sr - sy * sp * cr
+    q[2] = sy * cp * sr + cy * sp * cr
+    q[3] = sy * cp * cr - cy * sp * sr
+
+    return q
+
+
 def navigate_to_way_point(navigator, waypoint):
     # nav2 simple commander
     # import pdb; pdb.set_trace()
+    orentation = quaternion_from_euler(0, 0, waypoint.theta)
     goal_pose = PoseStamped()
     goal_pose.header.frame_id = 'map'
     goal_pose.header.stamp = navigator.get_clock().now().to_msg()
     goal_pose.pose.position.x = waypoint.x
     goal_pose.pose.position.y = waypoint.y
-    goal_pose.pose.orientation.w = 1.0
+    goal_pose.pose.orientation.w = orentation[0]
+    goal_pose.pose.orientation.z = orentation[3]
 
     navigator.goToPose(goal_pose)
 
