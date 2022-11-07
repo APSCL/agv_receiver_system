@@ -1,7 +1,7 @@
+import math
 import os
 import threading
 import time
-import math
 from http import HTTPStatus
 
 import rclpy
@@ -15,7 +15,7 @@ from communications import (
     WaypointJSONParser,
     WaypointServerCommunicator,
 )
-from config import INTER_ITERATION_PERIOD_SECONDS
+from config import COORDINATE_STANDARIZATION_ENABLED, INTER_ITERATION_PERIOD_SECONDS
 from core import (
     AGVActionMessages,
     AGVState,
@@ -25,7 +25,6 @@ from core import (
 )
 from memory import AGV, Memory, Task, Waypoint
 from ros_turtlesim_nav import TurtleSimNavigationPublisher
-
 
 
 def quaternion_from_euler(roll, pitch, yaw):
@@ -88,26 +87,41 @@ def navigate_to_way_point(navigator, waypoint):
     result = navigator.getResult()
     if result == TaskResult.SUCCEEDED:
         print('Goal succeeded!')
+        return True
     elif result == TaskResult.CANCELED:
         print('Goal was canceled!')
+        return False
     elif result == TaskResult.FAILED:
         print('Goal failed!')
+        return False
     else:
         print('Goal has an invalid return status!')
+        return False
     # end
 
 # define threading function up here! (to write that the current waypoint is visited!)
-def send_navigation_proccess_to_background_test(navigator, next_waypoint):
+def send_sequential_navigation_proccess_to_background_test(navigator, next_waypoint):
     # get all current coordinates
     print(f"Navigating to! x:{next_waypoint.x} y:{next_waypoint.y}")
-    navigate_to_way_point(navigator, next_waypoint)
+    navigation_success = navigate_to_way_point(navigator, next_waypoint)
     # nav_controller.navigate_to(current_x, current_y, current_theta, goal_x, goal_y)
     # update the waypoint as visited (this will cause a change in the behavior of the AGV)
     Memory.update_waypoint(id=next_waypoint.id, visited=True)
 
+def send_complete_navigation_process_to_background(navigator):
+    agv = Memory.get_agv()
+    current_task = agv.current_task
+    next_waypoint = Memory.get_next_task_waypoint()
 
-def send_navigation_process_to_background(coordinates):
-    pass
+    while next_waypoint != None:
+        print(f"Navigating to! x:{next_waypoint.x} y:{next_waypoint.y}")
+        # should be a blocking function
+        navigation_success = navigate_to_way_point(navigator, next_waypoint)
+        Memory.update_waypoint(id=next_waypoint.id, visited=True)
+        next_waypoint = Memory.get_next_task_waypoint()
+    
+    Memory.update_task(id=current_task.id, status=TaskStatus.COMPLETE)
+    Memory.update_agv_state(status=AGVState.DONE)
 
 class AGVController:
     def __init__(self, testing=False):
@@ -116,28 +130,35 @@ class AGVController:
             self.communicator = MockWaypointServerCommunicator()
             self.parser = MockWaypointJSONParser()
             self.navigator = TurtleSimNavigationPublisher()
-            self.navigation_function = send_navigation_proccess_to_background_test
+            self.navigation_function = send_complete_navigation_process_to_background
         else:
             self.communicator = WaypointServerCommunicator()
             self.parser = WaypointJSONParser()
             self.navigator = BasicNavigator()
             self.agv_set_initial_pose()
-            self.navigation_function = send_navigation_proccess_to_background_test
+            self.navigation_function = send_complete_navigation_process_to_background
 
         self.navigation_thread = None
 
     def _init_navigation(self):
         rclpy.init()
 
-    def agv_set_initial_pose(self):
+    def agv_set_initial_pose(self, x=0.0, y=0.0):
         initial_pose = PoseStamped()
         initial_pose.header.frame_id = 'map'
         initial_pose.header.stamp = self.navigator.get_clock().now().to_msg()
-        initial_pose.pose.position.x = 0.0
-        initial_pose.pose.position.y = 0.0
+        initial_pose.pose.position.x = x
+        initial_pose.pose.position.y = y
         initial_pose.pose.orientation.z = 1.0
         initial_pose.pose.orientation.w = 0.0
         self.navigator.setInitialPose(initial_pose)
+
+    def perform_coordinate_standarization(self):
+        agv = Memory.get_agv()
+        if agv is None:
+            print("AGV Not registered, cannot set the initial pose on a non-exisent AGV")
+        standardized_x, standardized_y = agv.x, agv.y
+        self.agv_set_initial_pose(standardized_x, standardized_y)
 
     def perform_waypoint_registration(self):
         Memory.update_agv_state(status=AGVState.READY)
@@ -195,8 +216,8 @@ class AGVController:
         Memory.update_task(id=next_task.id, status=TaskStatus.IN_PROGRESS)
         
         self.navigation_thread = TracedThread(
-            target=send_navigation_proccess_to_background_test,
-            args=(self.navigator, next_task_waypoint),
+            target=self.navigation_function,
+            args=(self.navigator,), daemon=True
         )
         self.navigation_thread.start()
 
@@ -204,21 +225,14 @@ class AGVController:
 
     def perform_busy_action(self):
         # check if we finished visting our currernt objective waypoint
-        agv = Memory.get_agv()
-        current_task = agv.current_task
-        next_task_waypoint = Memory.get_next_task_waypoint()
+        
         if self.navigation_thread.is_alive():
             return AGVActionMessages.SUCCESS
 
-        if next_task_waypoint is None:
-            Memory.update_task(id=current_task.id, status=TaskStatus.COMPLETE)
-            Memory.update_agv_state(status=AGVState.DONE)
-            return AGVActionMessages.SUCCESS
-
-        self.navigation_thread = TracedThread(
-            target=self.navigation_function, args=(self.navigator, next_task_waypoint), daemon=True
-        )
-        self.navigation_thread.start()
+        # self.navigation_thread = TracedThread(
+        #     target=self.navigation_function, args=(self.navigator,), daemon=True
+        # )
+        # self.navigation_thread.start()
         return AGVActionMessages.SUCCESS
 
     # reason for dividing these states: want to reduce the total amount of network calls per step!
@@ -237,6 +251,8 @@ def main():
     # set local ROS_DOMAIN_ID variable to the running AGV - THIS IS NOW HANDLED IN THE CALLING SCRIPT
     # register AGV to the server
     resistration_success = controller.perform_waypoint_registration()
+    if COORDINATE_STANDARIZATION_ENABLED:
+        controller.perform_coordinate_standarization()
     # if True:
     #     print("registration failure")
     #     return
