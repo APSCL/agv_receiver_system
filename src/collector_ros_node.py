@@ -7,13 +7,12 @@ from functools import partial
 
 import rclpy
 from rclpy.node import Node
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 from turtlesim.msg import Color, Pose
 
-from tf2_ros import TransformException 
-from tf2_ros.buffer import Buffer
-from tf2_ros.transform_listener import TransformListener 
- 
-
+import config
 from config import QOS_PROFILE, SAMPLE_PERIOD_SECONDS
 from memory import Memory
 
@@ -23,11 +22,11 @@ class InformationRetrievalNode(Node):
     def __init__(self):
         # import pdb; pdb.set_trace()
         super().__init__(f"information_retrieval_node")
-        ros_domain_id = os.environ.get("ROS_DOMAIN_ID")
+        agv_id = config.AGV_ID
         print(f"Starting Information Retrieval for AGV with ROS_DOMAIN_ID:{ros_domain_id}")
         Memory.wipe_database()
         Memory.create_agv_state()
-        Memory.update_agv_state(id=1)
+        Memory.update_agv_state(id=agv_id)
 
         # Declare and acquire `target_frame` parameter
         self.declare_parameter('target_frame', 'base_link')
