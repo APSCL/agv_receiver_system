@@ -23,7 +23,7 @@ class InformationRetrievalNode(Node):
         # import pdb; pdb.set_trace()
         super().__init__(f"information_retrieval_node")
         agv_id = config.AGV_ID
-        print(f"Starting Information Retrieval for AGV with ROS_DOMAIN_ID:{ros_domain_id}")
+        print(f"Starting Information Retrieval for AGV with ROS_DOMAIN_ID:{agv_id}")
         Memory.wipe_database()
         Memory.create_agv_state()
         Memory.update_agv_state(id=agv_id)
