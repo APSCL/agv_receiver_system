@@ -15,15 +15,28 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, scoped_session, sessionmaker
 
 from config import DATABASE_BASENAME, TESTING_DATABASE_NAME
-from core import AGVState, MemoryAccessMessages, TaskStatus
+from core import AGVDriveTrainType, AGVState, TaskStatus
 
 Base = declarative_base()
 
 
 class AGV(Base):
+    """
+    This model serves as an internal representation for each running and registered AGV (Autonomous Guided Vehicle)
+    in the Multiple AGV System.
+
+    id : A unique identifier for the AGV housing the Receiver Software, this is set manually in config.py
+    drive_train_type : the drive train model the AGV possesses
+    x : the current x-coordinate position of the AGV
+    y : the current y-coordinate position of the AGV
+    theta : the current rotational direction of the AGV (in radians)
+    status : the current part of the navigation process the AGV is currently in (can be READY, BUSY, DONE, STOPPED)
+    current_task : denotes the Task the AGV is currently executing
+    """
+
     __tablename__ = "agv"
-    # WILL BE THE ROS_DOMAIN_ID
     id = Column(Integer, primary_key=True)
+    drive_train_type = Column(Enum(AGVDriveTrainType), default=AGVDriveTrainType.ACKERMANN, nullable=False)
     x = Column(Float)
     y = Column(Float)
     theta = Column(Float)
@@ -31,16 +44,15 @@ class AGV(Base):
     # lazy = joined is eager loading and crucial to ensuring that we have access to objects outside of sessions
     current_task = relationship("Task", backref="assigned_agv", uselist=False, lazy="joined")
 
-    def __init__(self, id=None, x=None, y=None, theta=None, status=None, current_task=None):
+    def __init__(self, id=None, drive_train_type=None, x=None, y=None, theta=None, status=None, current_task=None):
         if id is not None:
             self.id = id
+        self.drive_train_type = drive_train_type if drive_train_type is not None else AGVDriveTrainType.ACKERMANN
         self.x = x if x is not None else 0.0
         self.y = y if y is not None else 0.0
         self.theta = theta if theta is not None else 0.0
         if current_task is not None:
             self.current_task = current_task
-        # else:
-        #     self.current_task = None
         if status is not None:
             self.status = status
         else:
@@ -51,6 +63,17 @@ class AGV(Base):
 
 
 class Task(Base):
+    """
+    This model servers as the internal representation for user created tasks. In contrast to the Waypoint Server's definition of Tasks,
+    the Receiver Software does not need to have information related to the priority or drive train assignment associated with the task.
+    The Receiver Software will simply execute all tasks provided to it on a "first-come-first-serve" basis
+
+    id : A unique identifier for each Task
+    waypoints : relational link to the waypoints (locations on a 2D plane) associated with this task
+    status : indicates which stage of processing a Task is in (ie - INCOMPLETE, IN_PROGRESS, COMPLETE)
+    agv_id : indicates which AGV this task is assigned to
+    """
+
     __tablename__ = "task"
     id = Column(Integer, primary_key=True)
     waypoints = relationship("Waypoint", backref="task", lazy="joined")
@@ -76,6 +99,18 @@ class Task(Base):
 
 
 class Waypoint(Base):
+    """
+    This model servers as the internal representation for user created waypoints (effectively coordinates)
+
+    id : A unique identifier for each Waypoint
+    x : the x-coordinate position of the Waypoint
+    y : the y-coordinate position of the Waypoint
+    theta : the rotational direction of the Waypoint (in radians)
+    order : indicates when this Waypoint should be visited (in comparison to other waypoints in the same Task)
+    visited : indicates whether the Waypoint was navigated to by the AGV
+    task_id : indicates which Task this waypoint belongs to
+    """
+
     __tablename__ = "waypoint"
     id = Column(Integer, primary_key=True)
     order = Column(Integer)
@@ -98,14 +133,21 @@ class Waypoint(Base):
         return f"WAYPOINT | ID:{self.id} | TASK:{self.task_id} | X:{self.x} Y:{self.y} 0:{self.theta} | ORDER:{self.order} | VISITED:{self.visited}"
 
 
-# https://stackoverflow.com/questions/25156264/sqlalchemy-using-decorator-to-provide-thread-safe-session-for-multiple-function
 def thread_safe_db_access(func):
+    """
+    The following function serves as a wrapper to all Receiver Software internal database functions. The wrapper make internal
+    database accesses atomic and concurrent, allowing for multiple scripts to interface with the database. 
+    The inspiration for this solution is provided by the stack overflow post below:
+
+    https://stackoverflow.com/questions/25156264/sqlalchemy-using-decorator-to-provide-thread-safe-session-for-multiple-function
+    """
+
     ros_domain_id = (
         os.environ.get("ROS_DOMAIN_ID", None)
         if os.environ.get("ROS_DOMAIN_ID", None) is not None
         else 1
     )
-    agv_memory_db_name = f"{DATABASE_BASENAME}_{ros_domain_id}" if not os.environ.get("TESTING", False) else TESTING_DATABASE_NAME
+    agv_memory_db_name = f"{DATABASE_BASENAME}_{ros_domain_id}" if not os.environ.get("TESTING", False) else f"{TESTING_DATABASE_NAME}_{ros_domain_id}"
     engine = create_engine(agv_memory_db_name)
     Base.metadata.create_all(bind=engine)
     session_factory = sessionmaker(bind=engine)
@@ -125,12 +167,13 @@ def thread_safe_db_access(func):
 
     return inner
 
-# TODO: Figure out how to create sessions and then close them!!
-# TODO: Description - two different instances
-# TODO: First Draft - EDIT LATER (maybe make each funtion a dynamic memory query instead!! (create filter statemetns with kwarsg etc))
-# TODO: Document what @thread_safe_db_access does
+
 class Memory:
-    # Comment, internal methods that work INSIDE of sessions will have the '-' suffix
+    """
+    Memory is the interface for the Receiver Software's internal memory. By implementing this as a 
+    database, we are able to update and share information across python scripts.
+    """
+    
     @classmethod
     @thread_safe_db_access
     def wipe_database(cls, session=None):
@@ -138,11 +181,14 @@ class Memory:
         session.query(Waypoint).delete()
         session.query(Task).delete()
 
-    # Creation Methods
     @classmethod
     @thread_safe_db_access
     def create_agv_state(cls, id=None, session=None):
-        # ensure there only exists one definition of the AGV at a time!
+        """
+        Creates the internal definition of the AGV housing the Receiver Software. Note, there will only ever
+        exist one AGV database entry for each AGV in the Multiple AGV Controller System.
+        """
+
         agv = session.query(AGV).first()
         if agv is not None:
             return False, "AGV definition already exists within internal memory"
@@ -156,7 +202,13 @@ class Memory:
     @classmethod
     @thread_safe_db_access
     def create_task(cls, waypoints, id=None, status=TaskStatus.INCOMPLETE, session=None):
-        # for now, waypoints will be [(x,y,theta,order)], before I assign them to a serialzer!
+        """
+        'waypoints' will be in the format [(x, y, theta, order), ... ]. I was too lazy to add python type descriptions.
+        If any future teams want to kill time in the lab, add types to all the funcitons in the Receiver Software with Python Typing:
+
+        https://docs.python.org/3/library/typing.html
+        """
+
         if id is not None:
             task = Task(id=id, status=status)
         else:
@@ -166,13 +218,11 @@ class Memory:
             x, y, theta, order = waypoint
             task.waypoints.append(Waypoint(x=x, y=y, theta=theta, order=order, visited=False))
             session.merge(task)
-
         return True, "Task Creation Success"
 
     @classmethod
     @thread_safe_db_access
     def delete_task(cls, id=None, current_task=False, session=None):
-        # for now, waypoints will be [(x,y,order)], before I assign them to a serialzer!
         if id is not None or current_task is True:
             agv = session.query(AGV).first()
             id = agv.current_task.id if agv.current_task is not None else None
@@ -185,14 +235,12 @@ class Memory:
             session.delete(waypoint)
         session.delete(task_to_delete)
 
-    # Retrieval Methods - expose objects outside of sessions (OUTSIDE, NOT INTERNAL GET)
     @classmethod
     @thread_safe_db_access
     def get_agv(cls, session=None):
         agv = session.query(AGV).first()
         current_task = agv.current_task
 
-        # expose agv and its current task (with associated waypoints) object for external session access
         session.expunge(agv)
         if current_task is not None:
             session.expunge(current_task)
@@ -210,7 +258,6 @@ class Memory:
             .first()
         )
         task_waypoints = session.query(Waypoint).filter_by(task_id=task.id).all()
-        # expose task waypoints
         session.expunge(task)
         cls._expunge_query_statement(session=session, query=task_waypoints)
         return task
@@ -314,7 +361,7 @@ class Memory:
     @classmethod
     def _expunge_query_statement(cls, session=None, query=None):
         """
-        Bread and butter for exposing objects for external use in memory!
+        Allows objects (a query) referenced in a SQLAlchemy client database connection to be used outside of said connection.
         """
         if session is None or query is None:
             print(f"session: {session} | query: {query} must both be defined!")
