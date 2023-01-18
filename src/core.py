@@ -1,6 +1,5 @@
 import sys
 import threading
-import trace
 from enum import Enum
 
 
@@ -27,23 +26,22 @@ class TaskStatus(BaseEnum):
     IN_PROGRESS = "IN_PROGRESS"
     COMPLETE = "COMPLETE"
 
+class AGVDriveTrainType(BaseEnum):
+    MECANUM = "MECANUM"
+    ACKERMANN = "ACKERMANN"
+
 
 class AGVActionMessages(BaseEnum):
     SUCCESS = 1
     ERROR = -1
     UNABLE_TO_RETRIEVE_TASK = -2
-
-
-class MemoryAccessMessages(BaseEnum):
-    ERROR = -1
-    OBJECT_NOT_FOUND = -2
-    NO_REMAINING_WAYPOINTS = -3
-
-
-class WaypointServerEndpoints(BaseEnum):
-    AGV_REGISTRATION = "/agvs/"
+    
 
 class TracedThread(threading.Thread):
+  """
+  TracedThread enables us to manually kill threads from within the context
+  of a different python script.
+  """
   def __init__(self, *args, **keywords):
     threading.Thread.__init__(self, *args, **keywords)
     self.killed = False

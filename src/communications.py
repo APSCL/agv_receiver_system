@@ -3,12 +3,15 @@ from http import HTTPStatus
 
 import requests
 
-from config import TEST_WAYPOINT_SERVER_IP, WAYPOINT_SERVER_IP, WAYPOINT_SERVER_PORT
+from config import WAYPOINT_SERVER_IP, WAYPOINT_SERVER_PORT
 from core import AGVState, CommandTypes
 from memory import Memory
 
 
 class WaypointServerCommunicator:
+    """
+    Interface for communicating with the Waypoint Server
+    """
     @classmethod
     def register_agv(cls):
         print("Attempting to register AGV to the waypoint server...")
@@ -72,33 +75,34 @@ class WaypointServerCommunicator:
 
 
 class MockWaypointServerCommunicator:
-    # Potentially used for testing
+    """
+    Mock Interface for communicating with the Waypoint Server. Used for testing Receiver Software without the
+    presence of a functioning Waypoint Server.
+    """
     @classmethod
     def register_agv(cls):
         print("Attempting to register AGV to the waypoint server...")
-        return True
+        return True, "Mock Text"
 
     @classmethod
     def get_task(cls):
-        waypoints = [(1, 1, 1), (5.5, 5.5, 2), (11, 1, 3)]
+        waypoints = [(1, 1, 0, 1), (5.5, 5.5, 0, 2), (11, 1,0, 3)]
         return HTTPStatus.OK, waypoints
 
     @classmethod
     def send_internal_state_update(cls):
         print("Sending Waypoint Server an internal update...")
-        pass
+        return HTTPStatus.OK, "Mock Text"
 
 
 class WaypointJSONParser:
-    @classmethod
-    def no_tasks_available(cls, status_code):
-        if HTTPStatus.ACCEPTED == status_code:
-            return True
-        return False
+    """
+    Interface for parsing JSON set by the Waypoint Server.
+    """
 
     @classmethod
     def no_tasks_available(cls, status_code):
-        if HTTPStatus.OK != status_code:
+        if status_code != 200:
             return True
         return False
 
@@ -109,7 +113,7 @@ class WaypointJSONParser:
         for waypoint in waypoints:
             parsed_waypoints.append((waypoint.get("x"), waypoint.get("y"), waypoint.get("theta"), waypoint.get("order")))
 
-        # it's important to create it with the task id from the waypoint server, so it can be identified later!
+        # it's important to create the task with the task id provided by the waypoint server for overall consistency
         Memory.create_task(parsed_waypoints, id=task_id)
         task = Memory.get_next_task()
         Memory.update_agv_state(status=AGVState.BUSY)
@@ -162,15 +166,17 @@ class WaypointJSONParser:
         Memory.update_agv_state(status=AGVState.READY)
 
 
-
 class MockWaypointJSONParser:
+    """
+    Mock Interface for parsing JSON set by the Waypoint Server. Used for testing Receiver Software without the
+    presence of a functioning Waypoint Server.
+    """
     @classmethod
     def no_tasks_available(cls, task_json):
         return False
 
     @classmethod
     def process_new_task(cls, task_json):
-        # waypoints must be a [(x, y, waypoint_order_int)]
         Memory.create_task(task_json)
         task = Memory.get_next_task()
         Memory.update_agv_state(status=AGVState.BUSY)
